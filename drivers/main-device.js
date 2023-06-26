@@ -15,7 +15,7 @@ module.exports = class mainDevice extends Device {
    */
   async onInit() {
     this.log(`${this.getName()} - onInit`);
-    this.setUnavailable(`Initializing ${this.getName()}`);
+    this.setUnavailable(`Initializing ${this.getName()}`).catch(this.error);
 
     const settings = this.getSettings();
     // TX Interval is only needed for devices that sends reports to APRS-IS. Some devices read only.
@@ -26,34 +26,50 @@ module.exports = class mainDevice extends Device {
     this.aprs.appVersion = `${this.homey.manifest.id} ${this.homey.manifest.version}`;
     this.aprs.debug = DEBUG;
 
+    // Login to server on succesful connection.
     this.aprs.on('connect', (server) => {
       this.log(`${this.getName()} - APRSClient - connected: ${server}`);
       this.aprs.userLogin();
-      this.setAvailable();
+      this.setAvailable().catch(this.error);
     });
 
-    this.aprs.on('error', (error) => {
-      this.log(`${this.getName()} - APRSClient - error: ${error}`);
-      this.setUnavailable(`APRSClient - error: ${error}`);
-    });
-
-    this.aprs.on('end', (error) => {
-      this.log(`${this.getName()} - APRSClient - end: ${error}`);
-      this.setUnavailable(`APRSClient - end: ${error}`);
-    });
-
-    this.aprs.on('close', (error) => {
-      this.log(`${this.getName()} - APRSClient - close: ${error}`);
-      this.setUnavailable(`APRSClient - close: ${error}`);
-    });
-
-    this.aprs.on('reconnect', (server) => {
-      this.log(`${this.getName()} - APRSClient - reconnect: ${server}`);
-      this.setUnavailable(`APRSClient - reconnect: ${server}`);
-    });
+    // this.aprs.on('reconnect', (server) => {
+    //   this.log(`${this.getName()} - APRSClient - reconnect: ${server}`);
+    // });
 
     this.aprs.on('data', (packet) => {
       this.log(`${this.getName()} - APRSClient - packet: ${JSON.stringify(packet)}`);
+    });
+
+    // Clean closure of connection to server. Do not reconnect.
+    this.aprs.on('close', (error) => {
+      this.log(`${this.getName()} - APRSClient - close: ${error}`);
+      this.setUnavailable(`APRSClient - close: ${error}`).catch(this.error);
+      this.aprs.disconnect();
+    });
+
+    // Server closed connection. Reconnect.
+    this.aprs.on('end', (error) => {
+      this.log(`${this.getName()} - APRSClient - end: ${error}`);
+      this.setUnavailable(`APRSClient - end: ${error}`).catch(this.error);
+      this.aprs.disconnect();
+
+      this.log(`${this.getName()} - APRSClient - reconnecting`);
+      this.aprs.reconnect().catch((err) => {
+        this.log(`${this.getName()} - APRSClient - reconnect error: ${err}`);
+      });
+    });
+
+    // Log errors
+    this.aprs.on('error', (error) => {
+      this.log(`${this.getName()} - APRSClient - error: ${error}`);
+      // this.setUnavailable(`APRSClient - error: ${error}`);
+      // this.aprs.disconnect();
+
+      // this.log(`${this.getName()} - APRSClient - reconnecting`);
+      // this.aprs.reconnect().catch((err) => {
+      //   this.log(`${this.getName()} - APRSClient - reconnect error: ${err}`);
+      // });
     });
 
     checkCapabilities(this);
@@ -116,7 +132,9 @@ module.exports = class mainDevice extends Device {
 
     if (reconnect) {
       this.log(`${this.getName()} - onSettings - reconnecting`);
-      this.aprs.reconnect();
+      this.aprs.reconnect().catch((err) => {
+        this.log(`${this.getName()} - onSettings - reconnect error: ${err}`);
+      });
     }
 
     this.log(`${this.getName()} - onSettings done`);
@@ -248,7 +266,7 @@ module.exports = class mainDevice extends Device {
     if (rainToday === null) rainToday = 0;
     rainToday += rain;
     await this.setValue('measure_rain.today', rainToday);
-    await this.setStoreValue('rainToday', rainToday);
+    await this.setStoreValue('rainToday', rainToday).catch(this.error);
 
     /**
      * 1-hour rain
@@ -258,7 +276,7 @@ module.exports = class mainDevice extends Device {
     rain1h.push({ t: now.getTime(), r: rain });
     const rain1hTotal = rain1h.reduce((total, entry) => total + entry.r, 0);
     await this.setValue('measure_rain.1h', rain1hTotal);
-    await this.setStoreValue('rain1h', JSON.stringify(rain1h));
+    await this.setStoreValue('rain1h', JSON.stringify(rain1h)).catch(this.error);
 
     /**
      * 24-hour rain
@@ -269,7 +287,7 @@ module.exports = class mainDevice extends Device {
     rain24h[hour] = rain1hTotal;
     const rain24hTotal = rain24h.reduce((total, rainfall) => total + rainfall, 0);
     await this.setValue('measure_rain.24h', rain24hTotal);
-    await this.setStoreValue('rain24h', JSON.stringify(rain24h));
+    await this.setStoreValue('rain24h', JSON.stringify(rain24h)).catch(this.error);
   }
 
   /**
@@ -285,8 +303,8 @@ module.exports = class mainDevice extends Device {
     let rain1h = JSON.parse(await this.getStoreValue('rain1h')) || [];
     rain1h = rain1h.filter(entry => new Date(entry.t).getTime() > oldestTimestamp);
     if( rain1h.length === 0 ) {
-      this.setCapabilityValue('measure_rain', null);
-      this.setCapabilityValue('measure_rain.1h', null);
+      this.setCapabilityValue('measure_rain', null).catch(this.error);
+      this.setCapabilityValue('measure_rain.1h', null).catch(this.error);
     }
     await this.setStoreValue('rain1h', JSON.stringify(rain1h)).catch(this.error);
     this.log(`${this.getName()} - purgeRainHistory - rain1h: ${JSON.stringify(rain1h)}`);
@@ -298,9 +316,9 @@ module.exports = class mainDevice extends Device {
       await this.setStoreValue('rain24h', JSON.stringify(rain24h)).catch(this.error);
       const rain24hTotal = rain24h.reduce((total, rainfall) => total + rainfall, 0);
       if(rain24hTotal === 0) {
-        this.setCapabilityValue('measure_rain.24h', null);
+        this.setCapabilityValue('measure_rain.24h', null).catch(this.error);
       } else {
-        this.setCapabilityValue('measure_rain.24h', rain24hTotal);
+        this.setCapabilityValue('measure_rain.24h', rain24hTotal).catch(this.error);
       }
     }
     this.log(`${this.getName()} - purgeRainHistory - rain24h: ${rain24h}`);
@@ -309,8 +327,8 @@ module.exports = class mainDevice extends Device {
     // Can't use getHours() as Homey OS misbehaves and returns local time instead of UTC, so we need to use toLocaleString() to get the current hour in local time.
     const nowHours = Number(now.toLocaleString('POSIX', { timeZone: this.homey.clock.getTimezone(), hour12: false, hour: "numeric" }));
     if ((nowHours === 0 && now.getMinutes() === 0)) {
-      this.setStoreValue('rainToday', 0);
-      this.setCapabilityValue('measure_rain.today', null);
+      this.setStoreValue('rainToday', 0).catch(this.error);
+      this.setCapabilityValue('measure_rain.today', null).catch(this.error);
       this.log(`${this.getName()} - purgeRainHistory - rainToday: ${this.getCapabilityValue('measure_rain.today')}`);
     }
 
@@ -333,7 +351,7 @@ module.exports = class mainDevice extends Device {
 
       if (delay) await sleep(delay);
 
-      await this.setCapabilityValue(key, value);
+      await this.setCapabilityValue(key, value).catch(this.error);
 
     }
   }
